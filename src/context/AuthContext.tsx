@@ -1,12 +1,8 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  createUserWithEmailAndPassword,
   onAuthStateChanged,
-  sendPasswordResetEmail,
-  signInWithEmailAndPassword,
   signInWithPopup,
   signOut,
-  updateProfile,
   type User,
 } from 'firebase/auth';
 import {
@@ -14,11 +10,9 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  query,
   serverTimestamp,
   setDoc,
   updateDoc,
-  where,
 } from 'firebase/firestore';
 import {
   auth,
@@ -29,7 +23,7 @@ import {
   handleFirestoreError,
   OperationType,
 } from '../lib/firebase';
-import { emailToInviteId, getLocalDateKey } from '../lib/format';
+import { emailToInviteId, getLocalDateKey, sanitizeId } from '../lib/format';
 import { ensureDefaultWorkspaceData, linkAdminRegistry } from '../lib/seedData';
 import {
   HRM_LIMITS,
@@ -41,13 +35,12 @@ import {
 
 export type PortalMode = 'backoffice' | 'employee';
 
-interface RegisterParams {
+export interface LocalSession {
+  mode: 'admin' | 'employee';
+  employeeId?: string;
   name: string;
   email: string;
-  password: string;
-  phone: string;
-  positionId?: string;
-  preferredPortal?: PortalMode;
+  uid: string;
 }
 
 interface SelfOnboardParams {
@@ -58,214 +51,134 @@ interface SelfOnboardParams {
 
 interface AuthContextValue {
   user: User | null;
+  session: LocalSession | null;
+  isAuthenticated: boolean;
+  sessionLabel: { name: string; email: string };
   authReady: boolean;
   isAdmin: boolean;
   employeeProfile: Employee | null;
   profileLoading: boolean;
   activePortal: PortalMode;
   setActivePortal: (mode: PortalMode) => void;
+  workspaceEmployees: Employee[];
+  employeesLoading: boolean;
   schedules: WorkSchedule[];
   positions: JobPosition[];
   companySettings: CompanySettings | null;
+  instantLoginAsAdmin: () => Promise<void>;
+  instantLoginAsEmployee: (emp: Employee) => void;
+  instantRegisterAndLoginEmployee: (params: SelfOnboardParams) => Promise<void>;
   loginWithGoogle: (preferredPortal?: PortalMode, switchAccount?: boolean) => Promise<void>;
-  loginWithEmail: (
-    email: string,
-    password: string,
-    preferredPortal?: PortalMode
-  ) => Promise<void>;
-  registerWithEmail: (params: RegisterParams) => Promise<void>;
-  resetPassword: (email: string) => Promise<void>;
   selfRegisterEmployee: (params: SelfOnboardParams) => Promise<void>;
   logout: () => Promise<void>;
   authError: string | null;
-  needsEmailProviderSetup: boolean;
   clearAuthError: () => void;
+}
+
+const SESSION_STORAGE_KEY = 'karyadesk_local_session';
+const PORTAL_STORAGE_KEY = 'karyadesk_active_portal';
+
+function readStoredSession(): LocalSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as LocalSession;
+    if (parsed && (parsed.mode === 'admin' || parsed.mode === 'employee')) {
+      return parsed;
+    }
+  } catch {
+    // Ignore invalid storage
+  }
+  return null;
+}
+
+function readStoredPortal(fallback: PortalMode): PortalMode {
+  try {
+    const raw = localStorage.getItem(PORTAL_STORAGE_KEY);
+    if (raw === 'backoffice' || raw === 'employee') return raw;
+  } catch {
+    // Ignore
+  }
+  return fallback;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function mapFirebaseAuthError(error: unknown): { message: string; needsProvider: boolean } {
+function mapGoogleError(error: unknown): string {
   const code = (error as { code?: string })?.code || '';
   const rawMsg = error instanceof Error ? error.message : String(error);
-
-  if (code === 'auth/operation-not-allowed' || rawMsg.includes('operation-not-allowed')) {
-    return {
-      needsProvider: true,
-      message:
-        'Metode login Email/Password belum diaktifkan di Firebase Console proyek ini. Aktifkan di Authentication → Sign-in method → Email/Password.',
-    };
+  if (code === 'auth/unauthorized-domain' || rawMsg.includes('unauthorized-domain')) {
+    return 'Popup Google diblokir pada domain pratinjau ini. Silakan gunakan tombol Masuk 1-Klik Tanpa Sandi di atas.';
   }
-  if (code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found') {
-    return { needsProvider: false, message: 'Email atau kata sandi salah.' };
+  if (code === 'auth/popup-blocked') {
+    return 'Popup browser diblokir. Gunakan tombol Masuk 1-Klik Tanpa Sandi di atas.';
   }
-  if (code === 'auth/email-already-in-use') {
-    return {
-      needsProvider: false,
-      message: 'Email sudah terdaftar. Silakan masuk melalui tab Masuk.',
-    };
-  }
-  if (code === 'auth/weak-password') {
-    return { needsProvider: false, message: 'Kata sandi minimal 6 karakter.' };
-  }
-  if (code === 'auth/invalid-email') {
-    return { needsProvider: false, message: 'Format email tidak valid.' };
-  }
-  if (code === 'auth/too-many-requests') {
-    return {
-      needsProvider: false,
-      message: 'Terlalu banyak percobaan login. Silakan tunggu beberapa menit.',
-    };
-  }
-  return { needsProvider: false, message: rawMsg || 'Gagal memproses autentikasi.' };
+  return rawMsg || 'Gagal masuk dengan Google. Gunakan Masuk 1-Klik Tanpa Sandi di atas.';
 }
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [employeeProfile, setEmployeeProfile] = useState<Employee | null>(null);
-  const [profileLoading, setProfileLoading] = useState(true);
-  const [activePortal, setActivePortal] = useState<PortalMode>('backoffice');
-  const preferredPortalRef = useRef<PortalMode | null>(null);
+  const [localSession, setLocalSession] = useState<LocalSession | null>(() => readStoredSession());
+  const [firebaseChecked, setFirebaseChecked] = useState(false);
+  const [googleAdminFlag, setGoogleAdminFlag] = useState(false);
+
+  const [workspaceEmployees, setWorkspaceEmployees] = useState<Employee[]>([]);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
   const [schedules, setSchedules] = useState<WorkSchedule[]>([]);
   const [positions, setPositions] = useState<JobPosition[]>([]);
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+
+  const [activePortal, setActivePortalState] = useState<PortalMode>(() => {
+    const initialSession = readStoredSession();
+    if (initialSession?.mode === 'employee') return readStoredPortal('employee');
+    return readStoredPortal('backoffice');
+  });
+  const preferredPortalRef = useRef<PortalMode | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
-  const [needsEmailProviderSetup, setNeedsEmailProviderSetup] = useState(false);
+
+  const setActivePortal = (mode: PortalMode) => {
+    setActivePortalState(mode);
+    try {
+      localStorage.setItem(PORTAL_STORAGE_KEY, mode);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const persistLocalSession = (next: LocalSession | null) => {
+    setLocalSession(next);
+    try {
+      if (next) {
+        localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(next));
+      } else {
+        localStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    } catch {
+      // Ignore
+    }
+  };
 
   const clearAuthError = () => {
     setAuthError(null);
-    setNeedsEmailProviderSetup(false);
   };
 
+  // Seed default workspace & subscribe to shared Firestore collections on mount
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
-      setAuthError(null);
-      setNeedsEmailProviderSetup(false);
-
-      if (!firebaseUser) {
-        setIsAdmin(false);
-        setEmployeeProfile(null);
-        setProfileLoading(false);
-        setSchedules([]);
-        setPositions([]);
-        setCompanySettings(null);
-        setAuthReady(true);
-        return;
-      }
-
-      setProfileLoading(true);
-      try {
-        const emailLower = (firebaseUser.email || '').trim().toLowerCase();
-        const isBootstrapped =
-          firebaseUser.emailVerified && emailLower === BOOTSTRAPPED_ADMIN_EMAIL;
-
-        let adminFlag = isBootstrapped;
-
-        if (isBootstrapped) {
-          setIsAdmin(true);
-          setActivePortal(preferredPortalRef.current || 'backoffice');
-          setAuthReady(true);
-          await Promise.all([
-            linkAdminRegistry(
-              firebaseUser.uid,
-              emailLower,
-              firebaseUser.displayName || 'HR Admin'
-            ),
-            ensureDefaultWorkspaceData(
-              emailLower,
-              firebaseUser.displayName || 'HR Admin',
-              firebaseUser.uid
-            ),
-          ]);
-          return;
-        }
-
-        try {
-          const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid));
-          if (adminSnap.exists()) {
-            adminFlag = true;
-          } else if (firebaseUser.emailVerified && emailLower) {
-            const inviteSnap = await getDoc(
-              doc(db, 'admin_invites', emailToInviteId(emailLower))
-            );
-            if (inviteSnap.exists()) {
-              adminFlag = true;
-              linkAdminRegistry(
-                firebaseUser.uid,
-                emailLower,
-                firebaseUser.displayName || 'HR Admin'
-              ).catch(() => {});
-            }
-          }
-        } catch {
-          // Not an admin
-        }
-
-        setIsAdmin(adminFlag);
-        if (preferredPortalRef.current) {
-          setActivePortal(adminFlag ? preferredPortalRef.current : 'employee');
-        } else {
-          setActivePortal(adminFlag ? 'backoffice' : 'employee');
-        }
-      } catch (err) {
-        console.error('Error initializing user session:', err);
-      } finally {
-        setAuthReady(true);
-      }
-    });
-
-    return () => unsub();
-  }, []);
-
-  // Listen to current user's employee profile + shared schedules + positions + settings
-  useEffect(() => {
-    if (!authReady || !user) {
-      return;
-    }
-
-    const emailLower = (user.email || '').trim().toLowerCase();
-    // Use email query only when emailVerified (satisfies anti-spoofing rule); otherwise query by UID.
-    const empQuery =
-      user.emailVerified && emailLower
-        ? query(collection(db, 'employees'), where('email', '==', emailLower))
-        : query(collection(db, 'employees'), where('uid', '==', user.uid));
+    ensureDefaultWorkspaceData(BOOTSTRAPPED_ADMIN_EMAIL, 'HR Manager', 'admin_default').catch((err) =>
+      console.warn('Workspace seed check deferred:', err)
+    );
 
     const unsubEmp = onSnapshot(
-      empQuery,
-      async (snapshot) => {
-        if (!snapshot.empty) {
-          const docSnap = snapshot.docs[0];
-          const data = { id: docSnap.id, ...docSnap.data() } as Employee;
-          setEmployeeProfile(data);
-
-          if (!data.uid && user.emailVerified) {
-            try {
-              await updateDoc(doc(db, 'employees', docSnap.id), {
-                uid: user.uid,
-                updatedAt: serverTimestamp(),
-              });
-            } catch (err) {
-              console.warn('Could not auto-link employee UID:', err);
-            }
-          }
-        } else {
-          // Auto-create an active employee profile immediately so any user can enter without friction
-          try {
-            await selfRegisterEmployee({
-              name: user.displayName || (user.email ? user.email.split('@')[0] : 'Karyawan'),
-              phone: '',
-            });
-          } catch (err) {
-            console.warn('Auto-onboarding deferred:', err);
-            setEmployeeProfile(null);
-          }
-        }
-        setProfileLoading(false);
+      collection(db, 'employees'),
+      (snapshot) => {
+        const list = snapshot.docs
+          .map((d) => ({ id: d.id, ...d.data() } as Employee))
+          .sort((a, b) => a.employeeCode.localeCompare(b.employeeCode));
+        setWorkspaceEmployees(list);
+        setEmployeesLoading(false);
       },
       (error) => {
-        setProfileLoading(false);
+        setEmployeesLoading(false);
         handleFirestoreError(error, OperationType.LIST, 'employees');
       }
     );
@@ -312,16 +225,150 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       unsubPositions();
       unsubSettings();
     };
-  }, [authReady, user]);
+  }, []);
 
-  const selfRegisterEmployee = async ({
-    name,
-    phone,
-    positionId,
-  }: SelfOnboardParams) => {
-    const currentUser = auth.currentUser;
-    if (!currentUser) return;
+  // Optional Firebase Auth state listener (for Google Sign-In when available)
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (firebaseUser) => {
+      setUser(firebaseUser);
+      setAuthError(null);
 
+      if (!firebaseUser) {
+        setGoogleAdminFlag(false);
+        setFirebaseChecked(true);
+        return;
+      }
+
+      try {
+        const emailLower = (firebaseUser.email || '').trim().toLowerCase();
+        const isBootstrapped =
+          firebaseUser.emailVerified && emailLower === BOOTSTRAPPED_ADMIN_EMAIL;
+
+        let adminFlag = isBootstrapped;
+
+        if (isBootstrapped) {
+          await linkAdminRegistry(
+            firebaseUser.uid,
+            emailLower,
+            firebaseUser.displayName || 'HR Admin'
+          );
+        } else {
+          try {
+            const adminSnap = await getDoc(doc(db, 'admins', firebaseUser.uid));
+            if (adminSnap.exists()) {
+              adminFlag = true;
+            } else if (firebaseUser.emailVerified && emailLower) {
+              const inviteSnap = await getDoc(
+                doc(db, 'admin_invites', emailToInviteId(emailLower))
+              );
+              if (inviteSnap.exists()) {
+                adminFlag = true;
+                linkAdminRegistry(
+                  firebaseUser.uid,
+                  emailLower,
+                  firebaseUser.displayName || 'HR Admin'
+                ).catch(() => {});
+              }
+            }
+          } catch {
+            // Not an admin
+          }
+        }
+
+        setGoogleAdminFlag(adminFlag);
+        if (preferredPortalRef.current) {
+          setActivePortal(adminFlag ? preferredPortalRef.current : 'employee');
+        } else {
+          setActivePortal(adminFlag ? 'backoffice' : 'employee');
+        }
+      } catch (err) {
+        console.error('Error initializing Google user session:', err);
+      } finally {
+        setFirebaseChecked(true);
+      }
+    });
+
+    return () => unsub();
+  }, []);
+
+  // Derive active employee profile & admin role deterministically
+  const { employeeProfile, isAdmin } = useMemo(() => {
+    if (localSession?.mode === 'admin') {
+      const matched =
+        workspaceEmployees.find((e) => e.id === (localSession.employeeId || 'emp_admin_01')) ||
+        workspaceEmployees.find((e) => e.role === 'admin') ||
+        workspaceEmployees[0] ||
+        null;
+      return { employeeProfile: matched, isAdmin: true };
+    }
+
+    if (localSession?.mode === 'employee') {
+      const matched =
+        workspaceEmployees.find((e) => e.id === localSession.employeeId) || null;
+      return {
+        employeeProfile: matched,
+        isAdmin: matched?.role === 'admin',
+      };
+    }
+
+    if (user) {
+      const emailLower = (user.email || '').trim().toLowerCase();
+      const matched =
+        workspaceEmployees.find(
+          (e) =>
+            (user.emailVerified && emailLower && e.email === emailLower) ||
+            e.uid === user.uid
+        ) || null;
+      return {
+        employeeProfile: matched,
+        isAdmin: googleAdminFlag || matched?.role === 'admin',
+      };
+    }
+
+    return { employeeProfile: null, isAdmin: false };
+  }, [localSession, user, workspaceEmployees, googleAdminFlag]);
+
+  // Auto-link UID or auto-create profile when signed in via Google
+  useEffect(() => {
+    if (!user || localSession || employeesLoading) return;
+
+    if (employeeProfile) {
+      if (!employeeProfile.uid && user.emailVerified) {
+        updateDoc(doc(db, 'employees', employeeProfile.id), {
+          uid: user.uid,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    selfRegisterEmployee({
+      name: user.displayName || (user.email ? user.email.split('@')[0] : 'Karyawan'),
+      phone: '',
+    }).catch((err) => console.warn('Auto-onboarding Google user deferred:', err));
+  }, [user, localSession, employeesLoading, employeeProfile]);
+
+  const authReady = Boolean(localSession) || firebaseChecked;
+  const isAuthenticated = Boolean(localSession || user);
+  const profileLoading = isAuthenticated && employeesLoading;
+
+  const sessionLabel = useMemo(() => {
+    if (employeeProfile) {
+      return { name: employeeProfile.name, email: employeeProfile.email };
+    }
+    if (localSession) {
+      return { name: localSession.name, email: localSession.email };
+    }
+    if (user) {
+      return {
+        name: user.displayName || 'HR Admin',
+        email: user.email || '',
+      };
+    }
+    return { name: 'KaryaDesk User', email: '' };
+  }, [employeeProfile, localSession, user]);
+
+  const selfRegisterEmployee = async ({ name, phone, positionId }: SelfOnboardParams) => {
     const chosenPos =
       positions.find((p) => p.id === positionId) ||
       positions[0] || {
@@ -331,21 +378,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         defaultDailyRate: 150000,
       };
 
-    const rawCode = `KRY-${currentUser.uid.slice(0, 6).toUpperCase().replace(/[^A-Z0-9]/g, 'X')}`;
-    const safeName = (name.trim() || currentUser.displayName || 'Karyawan').slice(
+    const currentUser = auth.currentUser;
+    const docId = currentUser
+      ? currentUser.uid
+      : sanitizeId(`emp_${Date.now()}_${Math.floor(Math.random() * 900 + 100)}`);
+    const nextNumber = workspaceEmployees.length + 1;
+    const candidateCode = `KRY-${String(nextNumber).padStart(3, '0')}`;
+    const codeExists = workspaceEmployees.some((e) => e.employeeCode === candidateCode);
+    const rawCode = codeExists
+      ? `KRY-${String(Date.now()).slice(-4)}`
+      : candidateCode;
+
+    const cleanName = (name.trim() || currentUser?.displayName || 'Karyawan Baru').slice(
       0,
       HRM_LIMITS.NAME_MAX
     );
-    const emailLower = (currentUser.email || `${currentUser.uid}@karyadesk.local`)
+    const safeName = cleanName.length >= 2 ? cleanName : 'Karyawan Baru';
+    const emailLower = (
+      currentUser?.email || `${rawCode.toLowerCase()}@karyadesk.id`
+    )
       .trim()
       .toLowerCase()
       .slice(0, HRM_LIMITS.EMAIL_MAX);
 
     try {
-      await setDoc(doc(db, 'employees', currentUser.uid), {
+      await setDoc(doc(db, 'employees', docId), {
         employeeCode: rawCode,
-        uid: currentUser.uid,
-        name: safeName.length >= 2 ? safeName : 'Karyawan Baru',
+        uid: docId,
+        name: safeName,
         email: emailLower,
         phone: phone.trim().slice(0, HRM_LIMITS.PHONE_MAX),
         address: '',
@@ -361,9 +421,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+
+      if (!currentUser || localSession) {
+        persistLocalSession({
+          mode: 'employee',
+          employeeId: docId,
+          name: safeName,
+          email: emailLower,
+          uid: docId,
+        });
+        setActivePortal('employee');
+      }
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `employees/${currentUser.uid}`);
+      handleFirestoreError(error, OperationType.CREATE, `employees/${docId}`);
     }
+  };
+
+  const instantLoginAsAdmin = async () => {
+    clearAuthError();
+    await ensureDefaultWorkspaceData(BOOTSTRAPPED_ADMIN_EMAIL, 'HR Manager', 'admin_default');
+    const adminEmp =
+      workspaceEmployees.find((e) => e.role === 'admin') || workspaceEmployees[0];
+    persistLocalSession({
+      mode: 'admin',
+      employeeId: adminEmp?.id || 'emp_admin_01',
+      name: adminEmp?.name || 'HR Manager',
+      email: adminEmp?.email || BOOTSTRAPPED_ADMIN_EMAIL,
+      uid: adminEmp?.uid || 'admin_default',
+    });
+    setActivePortal('backoffice');
+  };
+
+  const instantLoginAsEmployee = (emp: Employee) => {
+    clearAuthError();
+    persistLocalSession({
+      mode: 'employee',
+      employeeId: emp.id,
+      name: emp.name,
+      email: emp.email,
+      uid: emp.uid || emp.id,
+    });
+    setActivePortal('employee');
+  };
+
+  const instantRegisterAndLoginEmployee = async (params: SelfOnboardParams) => {
+    clearAuthError();
+    await selfRegisterEmployee(params);
   };
 
   const loginWithGoogle = async (portalChoice?: PortalMode, switchAccount = false) => {
@@ -372,98 +475,49 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       preferredPortalRef.current = portalChoice;
     }
     try {
+      persistLocalSession(null);
       await signInWithPopup(auth, switchAccount ? googleSwitchProvider : googleProvider);
     } catch (error) {
       const code = (error as { code?: string })?.code || '';
       if (code === 'auth/popup-closed-by-user') return;
-      const mapped = mapFirebaseAuthError(error);
-      setAuthError(mapped.message);
-    }
-  };
-
-  const loginWithEmail = async (
-    email: string,
-    password: string,
-    portalChoice?: PortalMode
-  ) => {
-    clearAuthError();
-    if (portalChoice) {
-      preferredPortalRef.current = portalChoice;
-    }
-    try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
-    } catch (error) {
-      const mapped = mapFirebaseAuthError(error);
-      setNeedsEmailProviderSetup(mapped.needsProvider);
-      setAuthError(mapped.message);
-      throw error;
-    }
-  };
-
-  const registerWithEmail = async ({
-    name,
-    email,
-    password,
-    phone,
-    positionId,
-    preferredPortal,
-  }: RegisterParams) => {
-    clearAuthError();
-    if (preferredPortal) {
-      preferredPortalRef.current = preferredPortal;
-    }
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email.trim(), password);
-      const safeName = (name.trim() || 'Karyawan').slice(0, HRM_LIMITS.NAME_MAX);
-      await updateProfile(cred.user, { displayName: safeName });
-      await selfRegisterEmployee({ name: safeName, phone, positionId });
-    } catch (error) {
-      const mapped = mapFirebaseAuthError(error);
-      setNeedsEmailProviderSetup(mapped.needsProvider);
-      setAuthError(mapped.message);
-      throw error;
-    }
-  };
-
-  const resetPassword = async (email: string) => {
-    clearAuthError();
-    try {
-      await sendPasswordResetEmail(auth, email.trim());
-    } catch (error) {
-      const mapped = mapFirebaseAuthError(error);
-      setNeedsEmailProviderSetup(mapped.needsProvider);
-      setAuthError(mapped.message);
-      throw error;
+      setAuthError(mapGoogleError(error));
     }
   };
 
   const logout = async () => {
     preferredPortalRef.current = null;
     clearAuthError();
-    await signOut(auth);
+    persistLocalSession(null);
+    if (auth.currentUser) {
+      await signOut(auth).catch(() => {});
+    }
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
+        session: localSession,
+        isAuthenticated,
+        sessionLabel,
         authReady,
         isAdmin,
         employeeProfile,
         profileLoading,
         activePortal,
         setActivePortal,
+        workspaceEmployees,
+        employeesLoading,
         schedules,
         positions,
         companySettings,
+        instantLoginAsAdmin,
+        instantLoginAsEmployee,
+        instantRegisterAndLoginEmployee,
         loginWithGoogle,
-        loginWithEmail,
-        registerWithEmail,
-        resetPassword,
         selfRegisterEmployee,
         logout,
         authError,
-        needsEmailProviderSetup,
         clearAuthError,
       }}
     >

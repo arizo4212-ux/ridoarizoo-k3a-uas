@@ -1,88 +1,72 @@
 import React, { useState } from 'react';
 import {
   AlertCircle,
+  ArrowRight,
   Building2,
   Camera,
-  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Clock,
-  ExternalLink,
-  Eye,
-  EyeOff,
-  Lock,
-  Mail,
-  Phone,
   ShieldCheck,
   Smartphone,
-  User as UserIcon,
+  UserPlus,
   Wallet,
 } from 'lucide-react';
 import { useAuth, type PortalMode } from '../context/AuthContext';
+import { formatRupiah } from '../lib/format';
 import { PWAInstallButton } from './PWAInstallButton';
-
-type AuthFormMode = 'login' | 'register' | 'reset';
 
 export const LoginView: React.FC = () => {
   const {
+    workspaceEmployees,
+    employeesLoading,
+    positions,
+    instantLoginAsAdmin,
+    instantLoginAsEmployee,
+    instantRegisterAndLoginEmployee,
     loginWithGoogle,
-    loginWithEmail,
-    registerWithEmail,
-    resetPassword,
     authError,
-    needsEmailProviderSetup,
     clearAuthError,
   } = useAuth();
 
   const [selectedPortal, setSelectedPortal] = useState<PortalMode>('employee');
-  const [showEmailForm, setShowEmailForm] = useState(false);
-  const [formMode, setFormMode] = useState<AuthFormMode>('login');
+  const [showNewEmployeeForm, setShowNewEmployeeForm] = useState(false);
 
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [phone, setPhone] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-
+  const [newName, setNewName] = useState('');
+  const [newPhone, setNewPhone] = useState('');
+  const [newPosId, setNewPosId] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [resetSent, setResetSent] = useState(false);
 
-  const switchFormMode = (mode: AuthFormMode) => {
-    clearAuthError();
-    setResetSent(false);
-    setFormMode(mode);
-  };
+  const activeEmployees = workspaceEmployees.filter((e) => e.status === 'active');
 
-  const handleGoogleLogin = async (switchAccount = false) => {
+  const handleInstantAdmin = async () => {
     setSubmitting(true);
     try {
-      await loginWithGoogle(selectedPortal, switchAccount);
+      await instantLoginAsAdmin();
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
+  const handleQuickCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
-    setResetSent(false);
+    if (newName.trim().length < 2) return;
     setSubmitting(true);
     try {
-      if (formMode === 'login') {
-        await loginWithEmail(email, password, selectedPortal);
-      } else if (formMode === 'register') {
-        await registerWithEmail({
-          name,
-          email,
-          password,
-          phone,
-          preferredPortal: selectedPortal,
-        });
-      } else {
-        await resetPassword(email);
-        setResetSent(true);
-      }
-    } catch {
-      // Error surfaced via authError in context
+      await instantRegisterAndLoginEmployee({
+        name: newName,
+        phone: newPhone,
+        positionId: newPosId || positions[0]?.id,
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setSubmitting(true);
+    try {
+      await loginWithGoogle(selectedPortal, false);
     } finally {
       setSubmitting(false);
     }
@@ -123,7 +107,7 @@ export const LoginView: React.FC = () => {
             Kendali penuh backoffice dan presensi selfie karyawan dalam satu sumber data nyata.
           </h1>
           <p className="mt-4 text-sm sm:text-base text-slate-300 leading-relaxed max-w-lg">
-            Semua akun Google dapat langsung masuk dengan 1 klik sebagai karyawan aktif secara otomatis, atau terhubung ke profil Backoffice yang telah didaftarkan manajemen.
+            Masuk langsung dengan 1 klik tanpa sandi dari HP maupun desktop. Semua data karyawan, jam kerja, foto selfie presensi, dan payroll tersinkron real-time di database cloud.
           </p>
 
           <div className="mt-10 grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -172,15 +156,15 @@ export const LoginView: React.FC = () => {
         </div>
       </div>
 
-      {/* Right Login Form Panel */}
+      {/* Right Instant Login Panel */}
       <div className="flex-1 flex items-center justify-center p-6 sm:p-10 lg:p-12">
         <div className="w-full max-w-md bg-white rounded-2xl border border-slate-200 p-7 sm:p-8 space-y-5">
           <div>
             <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Masuk Cepat ke KaryaDesk
+              Masuk Cepat Tanpa Sandi
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              Pilih portal tujuan, lalu masuk dengan 1 klik. Sesi tersimpan otomatis.
+              Pilih portal di bawah, lalu ketuk akun untuk langsung masuk.
             </p>
           </div>
 
@@ -188,7 +172,10 @@ export const LoginView: React.FC = () => {
           <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-xl">
             <button
               type="button"
-              onClick={() => setSelectedPortal('employee')}
+              onClick={() => {
+                clearAuthError();
+                setSelectedPortal('employee');
+              }}
               className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer min-h-[44px] ${
                 selectedPortal === 'employee'
                   ? 'bg-white text-slate-900 shadow-sm'
@@ -200,7 +187,10 @@ export const LoginView: React.FC = () => {
             </button>
             <button
               type="button"
-              onClick={() => setSelectedPortal('backoffice')}
+              onClick={() => {
+                clearAuthError();
+                setSelectedPortal('backoffice');
+              }}
               className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-xs font-semibold transition-all cursor-pointer min-h-[44px] ${
                 selectedPortal === 'backoffice'
                   ? 'bg-white text-slate-900 shadow-sm'
@@ -212,15 +202,180 @@ export const LoginView: React.FC = () => {
             </button>
           </div>
 
-          {/* Primary Instant Login (All Google Accounts Supported) */}
-          <div className="space-y-2.5">
+          {authError && (
+            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 text-xs text-red-700 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          {/* EMPLOYEE 1-TAP PICKER */}
+          {selectedPortal === 'employee' ? (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-slate-700">
+                    Pilih Akun Karyawan (1 Klik Masuk)
+                  </span>
+                  <span className="text-slate-400 font-mono tabular-nums">
+                    {activeEmployees.length} aktif
+                  </span>
+                </div>
+
+                {employeesLoading && activeEmployees.length === 0 ? (
+                  <div className="rounded-xl border border-slate-200 p-4 text-center text-xs text-slate-500">
+                    Memuat data karyawan dari database...
+                  </div>
+                ) : activeEmployees.length === 0 ? (
+                  <div className="rounded-xl border border-dashed border-slate-200 p-4 text-center text-xs text-slate-500">
+                    Belum ada karyawan aktif. Buat profil cepat di bawah.
+                  </div>
+                ) : (
+                  <div className="max-h-[260px] overflow-y-auto space-y-2 pr-0.5">
+                    {activeEmployees.map((emp) => (
+                      <button
+                        key={emp.id}
+                        type="button"
+                        disabled={submitting}
+                        onClick={() => instantLoginAsEmployee(emp)}
+                        className="w-full flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white hover:border-teal-600 hover:bg-teal-50/40 px-3.5 py-3 text-left transition-all cursor-pointer min-h-[60px] group"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-slate-900 text-teal-400 flex items-center justify-center font-bold text-sm shrink-0">
+                            {emp.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 truncate">
+                              {emp.name}
+                            </p>
+                            <p className="text-xs text-slate-500 truncate">
+                              <span className="font-mono tabular-nums">{emp.employeeCode}</span> · {emp.positionTitle}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 group-hover:translate-x-0.5 transition-transform shrink-0">
+                          <span>Masuk</span>
+                          <ArrowRight className="w-3.5 h-3.5" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Quick 1-Step Register Employee (No Password) */}
+              <div className="pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowNewEmployeeForm(!showNewEmployeeForm)}
+                  className="w-full flex items-center justify-between py-2 text-xs font-semibold text-teal-700 hover:text-teal-800 cursor-pointer"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    <UserPlus className="w-4 h-4" />
+                    <span>Karyawan Baru? Daftar &amp; Masuk Cepat</span>
+                  </span>
+                  {showNewEmployeeForm ? (
+                    <ChevronUp className="w-4 h-4" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4" />
+                  )}
+                </button>
+
+                {showNewEmployeeForm && (
+                  <form onSubmit={handleQuickCreateEmployee} className="mt-3 space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Nama Lengkap
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        minLength={2}
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        placeholder="Contoh: Andi Wijaya"
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm focus:outline-none focus:border-teal-600"
+                      />
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          No. HP / WhatsApp
+                        </label>
+                        <input
+                          type="text"
+                          value={newPhone}
+                          onChange={(e) => setNewPhone(e.target.value)}
+                          placeholder="0812-xxxx-xxxx"
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-sm font-mono focus:outline-none focus:border-teal-600"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          Jabatan
+                        </label>
+                        <select
+                          value={newPosId || positions[0]?.id || ''}
+                          onChange={(e) => setNewPosId(e.target.value)}
+                          className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:border-teal-600"
+                        >
+                          {positions.length === 0 ? (
+                            <option value="pos_operasional">Staff Operasional</option>
+                          ) : (
+                            positions.map((pos) => (
+                              <option key={pos.id} value={pos.id}>
+                                {pos.title} ({formatRupiah(pos.defaultDailyRate)}/hr)
+                              </option>
+                            ))
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={submitting || newName.trim().length < 2}
+                      className="w-full min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold transition-colors disabled:opacity-50 cursor-pointer"
+                    >
+                      {submitting ? 'Membuat Profil...' : 'Buat Profil & Langsung Masuk'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* BACKOFFICE 1-CLICK LOGIN */
+            <div className="space-y-4">
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-2">
+                <p className="text-xs font-semibold text-slate-900">
+                  Akses Manajemen Backoffice HR
+                </p>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Kelola Data Karyawan &amp; Jabatan, Jadwal Hari &amp; Jam Kerja, Monitoring Foto Selfie Kehadiran, serta Payroll Gaji Harian secara real-time.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                disabled={submitting}
+                onClick={handleInstantAdmin}
+                className="w-full min-h-[50px] inline-flex items-center justify-center gap-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-[0.99] px-5 py-3 text-sm font-semibold text-white transition-all disabled:opacity-60 cursor-pointer"
+              >
+                <Building2 className="w-4 h-4 text-teal-400" />
+                <span>{submitting ? 'Membuka Backoffice...' : 'Masuk Langsung ke Backoffice'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Optional Google Login Footer */}
+          <div className="pt-3 border-t border-slate-100 flex items-center justify-center">
             <button
               type="button"
               disabled={submitting}
-              onClick={() => handleGoogleLogin(false)}
-              className="w-full min-h-[48px] inline-flex items-center justify-center gap-3 rounded-xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 active:scale-[0.99] transition-all disabled:opacity-60 cursor-pointer"
+              onClick={handleGoogleLogin}
+              className="inline-flex items-center gap-2 py-1.5 px-3 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-900 hover:bg-slate-50 transition-colors cursor-pointer"
             >
-              <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   fill="#4285F4"
                   d="M23.745 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-8.97z"
@@ -238,224 +393,8 @@ export const LoginView: React.FC = () => {
                   d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
                 />
               </svg>
-              <span>{submitting ? 'Menghubungkan...' : 'Masuk Cepat dengan Google'}</span>
+              <span>Atau masuk dengan Google (opsional)</span>
             </button>
-
-            <button
-              type="button"
-              disabled={submitting}
-              onClick={() => handleGoogleLogin(true)}
-              className="w-full py-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 cursor-pointer"
-            >
-              Pilih / ganti akun Google lain
-            </button>
-
-            <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-xs text-slate-600 flex items-start gap-2">
-              <CheckCircle2 className="w-4 h-4 text-teal-600 shrink-0 mt-0.5" />
-              <span>
-                Semua akun Google yang masuk otomatis aktif sebagai karyawan untuk presensi selfie &amp; payroll harian.
-              </span>
-            </div>
-          </div>
-
-          {authError && !showEmailForm && (
-            <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 text-xs text-red-700 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              <span>{authError}</span>
-            </div>
-          )}
-
-          {/* Secondary Collapsible Email & Password Login */}
-          <div className="pt-2 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={() => {
-                clearAuthError();
-                setShowEmailForm(!showEmailForm);
-              }}
-              className="w-full flex items-center justify-between py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
-            >
-              <span>Atau masuk dengan Email &amp; Kata Sandi</span>
-              {showEmailForm ? (
-                <ChevronUp className="w-4 h-4" />
-              ) : (
-                <ChevronDown className="w-4 h-4" />
-              )}
-            </button>
-
-            {showEmailForm && (
-              <div className="mt-3 space-y-4">
-                {formMode !== 'reset' && (
-                  <div className="flex border-b border-slate-200 text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => switchFormMode('login')}
-                      className={`flex-1 py-2 border-b-2 transition-colors cursor-pointer ${
-                        formMode === 'login'
-                          ? 'border-slate-900 text-slate-900'
-                          : 'border-transparent text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      Masuk
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => switchFormMode('register')}
-                      className={`flex-1 py-2 border-b-2 transition-colors cursor-pointer ${
-                        formMode === 'register'
-                          ? 'border-slate-900 text-slate-900'
-                          : 'border-transparent text-slate-500 hover:text-slate-800'
-                      }`}
-                    >
-                      Daftar Akun
-                    </button>
-                  </div>
-                )}
-
-                {authError && (
-                  <div className="rounded-xl bg-red-50 border border-red-200 p-3.5 text-xs text-red-700 space-y-2">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                      <span>{authError}</span>
-                    </div>
-                    {needsEmailProviderSetup && (
-                      <a
-                        href="https://console.firebase.google.com/project/adept-hallway-pcvp7/authentication/providers"
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 font-semibold underline text-red-800 hover:text-red-950"
-                      >
-                        <span>Aktifkan Email/Password di Firebase Console</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    )}
-                  </div>
-                )}
-
-                {resetSent && (
-                  <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-800 flex items-start gap-2">
-                    <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>Tautan reset kata sandi telah dikirim ke <strong>{email}</strong>.</span>
-                  </div>
-                )}
-
-                <form onSubmit={handleFormSubmit} className="space-y-3">
-                  {formMode === 'register' && (
-                    <>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">
-                          Nama Lengkap
-                        </label>
-                        <div className="relative">
-                          <UserIcon className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                          <input
-                            type="text"
-                            required
-                            minLength={2}
-                            value={name}
-                            onChange={(e) => setName(e.target.value)}
-                            placeholder="Nama lengkap"
-                            className="w-full rounded-xl border border-slate-200 pl-10 pr-3.5 py-2 text-sm focus:outline-none focus:border-teal-600"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-700 mb-1">
-                          No. Telepon
-                        </label>
-                        <div className="relative">
-                          <Phone className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                          <input
-                            type="text"
-                            value={phone}
-                            onChange={(e) => setPhone(e.target.value)}
-                            placeholder="0812-xxxx-xxxx"
-                            className="w-full rounded-xl border border-slate-200 pl-10 pr-3.5 py-2 text-sm font-mono focus:outline-none focus:border-teal-600"
-                          />
-                        </div>
-                      </div>
-                    </>
-                  )}
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Email</label>
-                    <div className="relative">
-                      <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="email"
-                        required
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        placeholder="nama@perusahaan.com"
-                        className="w-full rounded-xl border border-slate-200 pl-10 pr-3.5 py-2 text-sm focus:outline-none focus:border-teal-600"
-                      />
-                    </div>
-                  </div>
-
-                  {formMode !== 'reset' && (
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-xs font-semibold text-slate-700">
-                          Kata Sandi
-                        </label>
-                        {formMode === 'login' && (
-                          <button
-                            type="button"
-                            onClick={() => switchFormMode('reset')}
-                            className="text-xs font-medium text-teal-700 hover:underline cursor-pointer"
-                          >
-                            Lupa kata sandi?
-                          </button>
-                        )}
-                      </div>
-                      <div className="relative">
-                        <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                        <input
-                          type={showPassword ? 'text' : 'password'}
-                          required
-                          minLength={6}
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          placeholder="Minimal 6 karakter"
-                          className="w-full rounded-xl border border-slate-200 pl-10 pr-10 py-2 text-sm focus:outline-none focus:border-teal-600"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
-                        >
-                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={submitting}
-                    className="w-full min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold transition-colors disabled:opacity-60 cursor-pointer"
-                  >
-                    {submitting
-                      ? 'Memproses...'
-                      : formMode === 'login'
-                      ? 'Masuk dengan Email'
-                      : formMode === 'register'
-                      ? 'Daftar & Masuk'
-                      : 'Kirim Tautan Reset'}
-                  </button>
-
-                  {formMode === 'reset' && (
-                    <button
-                      type="button"
-                      onClick={() => switchFormMode('login')}
-                      className="w-full text-xs font-semibold text-slate-600 hover:text-slate-900 py-1 cursor-pointer"
-                    >
-                      Kembali ke form Masuk
-                    </button>
-                  )}
-                </form>
-              </div>
-            )}
           </div>
         </div>
       </div>

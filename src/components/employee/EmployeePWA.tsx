@@ -49,6 +49,7 @@ type EmployeeTab = 'beranda' | 'presensi' | 'laporan' | 'profil';
 export const EmployeePWA: React.FC = () => {
   const {
     user,
+    sessionLabel,
     isAdmin,
     employeeProfile,
     schedules,
@@ -72,7 +73,7 @@ export const EmployeePWA: React.FC = () => {
   const [showEditProfile, setShowEditProfile] = useState(false);
 
   // Self-onboarding form state when signed-in user does not have an employee record yet
-  const [onboardName, setOnboardName] = useState(user?.displayName || '');
+  const [onboardName, setOnboardName] = useState(sessionLabel.name || '');
   const [onboardPhone, setOnboardPhone] = useState('');
   const [onboardPosId, setOnboardPosId] = useState('');
   const [onboarding, setOnboarding] = useState(false);
@@ -91,13 +92,16 @@ export const EmployeePWA: React.FC = () => {
 
   // Listen to employee's own attendance & payroll records
   useEffect(() => {
-    if (!user) return;
-    const emailLower = (user.email || '').trim().toLowerCase();
-    const useEmailQuery = Boolean(user.emailVerified && emailLower);
+    if (!employeeProfile?.id) {
+      setAttendanceList([]);
+      setPayrollList([]);
+      return;
+    }
 
-    const attQuery = useEmailQuery
-      ? query(collection(db, 'attendance'), where('employeeEmail', '==', emailLower))
-      : query(collection(db, 'attendance'), where('employeeUid', '==', user.uid));
+    const attQuery = query(
+      collection(db, 'attendance'),
+      where('employeeId', '==', employeeProfile.id)
+    );
 
     const unsubAtt = onSnapshot(
       attQuery,
@@ -110,9 +114,10 @@ export const EmployeePWA: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'attendance')
     );
 
-    const payQuery = useEmailQuery
-      ? query(collection(db, 'payroll_records'), where('employeeEmail', '==', emailLower))
-      : query(collection(db, 'payroll_records'), where('employeeUid', '==', user.uid));
+    const payQuery = query(
+      collection(db, 'payroll_records'),
+      where('employeeId', '==', employeeProfile.id)
+    );
 
     const unsubPay = onSnapshot(
       payQuery,
@@ -129,7 +134,7 @@ export const EmployeePWA: React.FC = () => {
       unsubAtt();
       unsubPay();
     };
-  }, [user]);
+  }, [employeeProfile?.id]);
 
   const todayKey = getLocalDateKey(now);
   const currentMonthKey = getCurrentMonthKey(now);
@@ -205,7 +210,7 @@ export const EmployeePWA: React.FC = () => {
   }, [attendanceList, selectedMonth, employeeProfile?.dailyRate]);
 
   const handleClockSubmit = async (photoDataUrl: string, note: string) => {
-    if (!employeeProfile || !user) return;
+    if (!employeeProfile) return;
     const timestampNow = new Date();
     const dateKey = getLocalDateKey(timestampNow);
     const docId = `${employeeProfile.id}_${dateKey}`;
@@ -220,7 +225,7 @@ export const EmployeePWA: React.FC = () => {
       try {
         await setDoc(doc(db, 'attendance', docId), {
           employeeId: employeeProfile.id,
-          employeeUid: user.uid,
+          employeeUid: employeeProfile.uid || user?.uid || employeeProfile.id,
           employeeEmail: employeeProfile.email,
           employeeCode: employeeProfile.employeeCode,
           employeeName: employeeProfile.name,
@@ -342,7 +347,7 @@ export const EmployeePWA: React.FC = () => {
             </div>
             <div>
               <h2 className="text-lg font-bold text-slate-900">Lengkapi Profil Karyawan</h2>
-              <p className="text-xs text-slate-500">{user?.email}</p>
+              <p className="text-xs text-slate-500">{sessionLabel.email || 'Profil Karyawan Baru'}</p>
             </div>
           </div>
 

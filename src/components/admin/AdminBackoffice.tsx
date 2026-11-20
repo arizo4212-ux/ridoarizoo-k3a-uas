@@ -43,7 +43,7 @@ const NAV_ITEMS: { id: AdminSection; label: string; icon: React.ComponentType<{ 
 ];
 
 export const AdminBackoffice: React.FC = () => {
-  const { user, schedules, companySettings, setActivePortal, logout } = useAuth();
+  const { sessionLabel, schedules, companySettings, setActivePortal, logout } = useAuth();
   const [section, setSection] = useState<AdminSection>('overview');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -179,9 +179,9 @@ export const AdminBackoffice: React.FC = () => {
           <div className="flex items-center justify-between gap-2 px-1 pt-1">
             <div className="min-w-0">
               <p className="text-xs font-semibold text-white truncate">
-                {user?.displayName || 'HR Admin'}
+                {sessionLabel.name || 'HR Admin'}
               </p>
-              <p className="text-[11px] text-slate-400 truncate">{user?.email}</p>
+              <p className="text-[11px] text-slate-400 truncate">{sessionLabel.email}</p>
             </div>
             <button
               type="button"

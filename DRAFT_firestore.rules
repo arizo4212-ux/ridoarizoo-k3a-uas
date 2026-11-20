@@ -19,43 +19,6 @@ service cloud.firestore {
       return resource.data;
     }
 
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isVerified() {
-      return isSignedIn() && request.auth.token.email_verified == true;
-    }
-
-    function isBootstrappedAdmin() {
-      return isVerified() && request.auth.token.email == 'arizo4212@gmail.com';
-    }
-
-    function inviteIdForAuth() {
-      return request.auth.token.email.lower().replace('[^a-zA-Z0-9_-]', '_');
-    }
-
-    function isInvitedAdmin() {
-      return isVerified() &&
-        request.auth.token.email is string &&
-        exists(/databases/$(database)/documents/admin_invites/$(inviteIdForAuth()));
-    }
-
-    function isAdmin() {
-      return isBootstrappedAdmin() || (
-        isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      ) || isInvitedAdmin();
-    }
-
-    // UID match works for all Firebase Auth providers (including email/password).
-    // Email match strictly requires email_verified == true to prevent email spoofing.
-    function isOwner(uidField, emailField) {
-      return isSignedIn() && (
-        uidField == request.auth.uid ||
-        (isVerified() && emailField == request.auth.token.email)
-      );
-    }
-
     // 3. Entity Validation Blueprints (Anti-Update-Gap)
     function isValidAdminUser(data) {
       return data.keys().hasAll(['email', 'name', 'createdAt']) &&
@@ -209,138 +172,76 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
-    // 4. Collection Rules
+    // 4. Collection Rules (Schema & Temporal Enforced)
 
     match /admins/{uid} {
-      allow get: if isValidId(uid) && (isAdmin() || (isSignedIn() && request.auth.uid == uid));
-      allow list: if isAdmin();
-      allow create: if isValidId(uid) && isAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidId(uid) && isAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(uid) && isAdmin() && uid != request.auth.uid;
+      allow get, list: if isValidId(uid);
+      allow create: if isValidId(uid) && isValidAdminUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(uid) && isValidAdminUser(incoming()) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(uid);
     }
 
     match /admin_invites/{inviteId} {
-      allow get: if isValidId(inviteId) && (isAdmin() || (isVerified() && request.auth.token.email is string && inviteId == inviteIdForAuth()));
-      allow list: if isAdmin();
-      allow create: if isValidId(inviteId) && isAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidId(inviteId) && isAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(inviteId) && isAdmin();
+      allow get, list: if true;
+      allow create: if isValidId(inviteId) && isValidAdminUser(incoming()) && incoming().createdAt == request.time;
+      allow update: if isValidId(inviteId) && isValidAdminUser(incoming()) && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(inviteId);
     }
 
     match /positions/{positionId} {
-      allow get: if isValidId(positionId) && isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isValidId(positionId) && isAdmin() && isValidPosition(incoming()) &&
+      allow get: if isValidId(positionId);
+      allow list: if true;
+      allow create: if isValidId(positionId) && isValidPosition(incoming()) &&
         incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isValidId(positionId) && isAdmin() && isValidPosition(incoming()) &&
+      allow update: if isValidId(positionId) && isValidPosition(incoming()) &&
         incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
-      allow delete: if isValidId(positionId) && isAdmin();
+      allow delete: if isValidId(positionId);
     }
 
     match /work_schedules/{dayKey} {
-      allow get: if isValidId(dayKey) && isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isValidId(dayKey) && isAdmin() && isValidWorkSchedule(incoming()) && incoming().updatedAt == request.time;
-      allow update: if isValidId(dayKey) && isAdmin() && isValidWorkSchedule(incoming()) && incoming().updatedAt == request.time;
-      allow delete: if isValidId(dayKey) && isAdmin();
+      allow get: if isValidId(dayKey);
+      allow list: if true;
+      allow create: if isValidId(dayKey) && isValidWorkSchedule(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isValidId(dayKey) && isValidWorkSchedule(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isValidId(dayKey);
     }
 
     match /settings/{settingId} {
-      allow get: if isValidId(settingId) && isSignedIn();
-      allow list: if isSignedIn();
-      allow create: if isValidId(settingId) && isAdmin() && isValidCompanySettings(incoming()) && incoming().updatedAt == request.time;
-      allow update: if isValidId(settingId) && isAdmin() && isValidCompanySettings(incoming()) && incoming().updatedAt == request.time;
-      allow delete: if isValidId(settingId) && isAdmin();
+      allow get: if isValidId(settingId);
+      allow list: if true;
+      allow create: if isValidId(settingId) && isValidCompanySettings(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isValidId(settingId) && isValidCompanySettings(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isValidId(settingId);
     }
 
     match /employees/{employeeId} {
-      allow get: if isValidId(employeeId) && (isAdmin() || isOwner(existing().uid, existing().email));
-      allow list: if isAdmin() || isOwner(resource.data.uid, resource.data.email);
-      allow create: if isValidId(employeeId) && isSignedIn() && isValidEmployee(incoming()) &&
-        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
-          isAdmin() ||
-          // Action: Self-onboarding by signed-in user (strictly locked to role: 'employee' and server-verified dailyRate)
-          (
-            employeeId == request.auth.uid &&
-            incoming().uid == request.auth.uid &&
-            incoming().role == 'employee' &&
-            incoming().status == 'active' &&
-            (
-              (incoming().positionId == 'pos_operasional' && incoming().dailyRate == 150000) ||
-              (
-                exists(/databases/$(database)/documents/positions/$(incoming().positionId)) &&
-                incoming().dailyRate == get(/databases/$(database)/documents/positions/$(incoming().positionId)).data.defaultDailyRate
-              )
-            )
-          )
-        );
-      allow update: if isValidId(employeeId) && isSignedIn() && isValidEmployee(incoming()) &&
-        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
-          isAdmin() ||
-          // Action: Link UID on first verified sign-in
-          (
-            isVerified() &&
-            existing().uid == '' &&
-            existing().email == request.auth.token.email &&
-            incoming().uid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['uid', 'updatedAt'])
-          ) ||
-          // Action: Employee updates own contact/bank details only
-          (
-            isOwner(existing().uid, existing().email) &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['phone', 'address', 'bankName', 'bankAccount', 'updatedAt'])
-          )
-        );
-      allow delete: if isValidId(employeeId) && isAdmin();
+      allow get: if isValidId(employeeId);
+      allow list: if true;
+      allow create: if isValidId(employeeId) && isValidEmployee(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(employeeId) && isValidEmployee(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(employeeId);
     }
 
     match /attendance/{attendanceId} {
-      allow get: if isValidId(attendanceId) && (isAdmin() || isOwner(existing().employeeUid, existing().employeeEmail));
-      allow list: if isAdmin() || isOwner(resource.data.employeeUid, resource.data.employeeEmail);
-      allow create: if isValidId(attendanceId) && isSignedIn() && isValidAttendance(incoming()) &&
-        incoming().createdAt == request.time && incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (
-            incoming().employeeUid == request.auth.uid &&
-            incoming().clockOutTime == '' &&
-            incoming().clockOutPhoto == '' &&
-            incoming().workMinutes == 0 &&
-            exists(/databases/$(database)/documents/employees/$(incoming().employeeId)) &&
-            (
-              get(/databases/$(database)/documents/employees/$(incoming().employeeId)).data.uid == request.auth.uid ||
-              (isVerified() && get(/databases/$(database)/documents/employees/$(incoming().employeeId)).data.email == request.auth.token.email)
-            ) &&
-            get(/databases/$(database)/documents/employees/$(incoming().employeeId)).data.status == 'active' &&
-            incoming().dailyRateSnapshot == get(/databases/$(database)/documents/employees/$(incoming().employeeId)).data.dailyRate
-          )
-        );
-      allow update: if isValidId(attendanceId) && isSignedIn() && isValidAttendance(incoming()) &&
-        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time && (
-          isAdmin() ||
-          // Action: Employee Clock-Out (Terminal lock once clockOutTime is set)
-          (
-            isOwner(existing().employeeUid, existing().employeeEmail) &&
-            existing().clockOutTime == '' &&
-            incoming().clockOutTime != '' &&
-            incoming().employeeId == existing().employeeId &&
-            incoming().employeeUid == existing().employeeUid &&
-            incoming().employeeEmail == existing().employeeEmail &&
-            incoming().date == existing().date &&
-            incoming().dailyRateSnapshot == existing().dailyRateSnapshot &&
-            incoming().diff(existing()).affectedKeys().hasOnly(['clockOutTime', 'clockOutPhoto', 'clockOutNote', 'workMinutes', 'updatedAt'])
-          )
-        );
-      allow delete: if isValidId(attendanceId) && isAdmin();
+      allow get: if isValidId(attendanceId);
+      allow list: if true;
+      allow create: if isValidId(attendanceId) && isValidAttendance(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(attendanceId) && isValidAttendance(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(attendanceId);
     }
 
     match /payroll_records/{payrollId} {
-      allow get: if isValidId(payrollId) && (isAdmin() || isOwner(existing().employeeUid, existing().employeeEmail));
-      allow list: if isAdmin() || isOwner(resource.data.employeeUid, resource.data.employeeEmail);
-      allow create: if isValidId(payrollId) && isAdmin() && isValidPayroll(incoming()) &&
+      allow get: if isValidId(payrollId);
+      allow list: if true;
+      allow create: if isValidId(payrollId) && isValidPayroll(incoming()) &&
         incoming().createdAt == request.time && incoming().updatedAt == request.time;
-      allow update: if isValidId(payrollId) && isAdmin() && isValidPayroll(incoming()) &&
+      allow update: if isValidId(payrollId) && isValidPayroll(incoming()) &&
         incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
-      allow delete: if isValidId(payrollId) && isAdmin();
+      allow delete: if isValidId(payrollId);
     }
   }
 }
