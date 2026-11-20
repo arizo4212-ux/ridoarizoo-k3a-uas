@@ -131,3 +131,30 @@ export function exportRowsToCSV(filename: string, headers: string[], rows: (stri
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
+
+export function calculateInclusiveDays(startDate: string, endDate: string): number {
+  if (!startDate || !endDate) return 0;
+  const sParts = startDate.split('-').map(Number);
+  const eParts = endDate.split('-').map(Number);
+  if (sParts.length !== 3 || eParts.length !== 3 || sParts.some(isNaN) || eParts.some(isNaN)) {
+    return 0;
+  }
+  const s = new Date(sParts[0], sParts[1] - 1, sParts[2]);
+  const e = new Date(eParts[0], eParts[1] - 1, eParts[2]);
+  const diff = Math.round((e.getTime() - s.getTime()) / 86400000);
+  if (diff < 0) return 0;
+  return Math.min(90, diff + 1);
+}
+
+export function enumerateDateRange(startDate: string, endDate: string): string[] {
+  const days = calculateInclusiveDays(startDate, endDate);
+  if (days <= 0) return [];
+  const [y, m, d] = startDate.split('-').map(Number);
+  const result: string[] = [];
+  for (let i = 0; i < days; i++) {
+    const dt = new Date(y, m - 1, d + i);
+    result.push(getLocalDateKey(dt));
+  }
+  return result;
+}
+

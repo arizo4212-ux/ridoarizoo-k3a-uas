@@ -164,6 +164,36 @@
         "bonus", "deduction", "netPay", "status", "notes",
         "createdAt", "updatedAt"
       ]
+    },
+    "LeaveRequest": {
+      "title": "LeaveRequest",
+      "description": "Employee leave/time-off request and HR approval status.",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "employeeUid": { "type": "string", "maxLength": 128 },
+        "employeeEmail": { "type": "string", "format": "email", "maxLength": 160 },
+        "employeeCode": { "type": "string", "maxLength": 32 },
+        "employeeName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "positionTitle": { "type": "string", "maxLength": 80 },
+        "department": { "type": "string", "maxLength": 80 },
+        "leaveType": { "type": "string", "enum": ["Cuti Tahunan", "Cuti Sakit", "Izin Khusus", "Cuti Melahirkan"], "maxLength": 32 },
+        "startDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "endDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "totalDays": { "type": "number" },
+        "reason": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "status": { "type": "string", "enum": ["Menunggu", "Disetujui", "Ditolak"], "maxLength": 20 },
+        "adminNote": { "type": "string", "maxLength": 300 },
+        "reviewedBy": { "type": "string", "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "employeeId", "employeeUid", "employeeEmail", "employeeCode",
+        "employeeName", "positionTitle", "department", "leaveType",
+        "startDate", "endDate", "totalDays", "reason", "status",
+        "adminNote", "reviewedBy", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -198,6 +228,10 @@
     "/payroll_records/{payrollId}": {
       "schema": { "$ref": "#/entities/PayrollRecord" },
       "description": "Generated daily-rate payroll records per employee and period."
+    },
+    "/leave_requests/{leaveId}": {
+      "schema": { "$ref": "#/entities/LeaveRequest" },
+      "description": "Employee leave requests and HR approval workflow."
     }
   }
 }

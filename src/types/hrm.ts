@@ -16,12 +16,15 @@ export const HRM_LIMITS = {
   PHOTO_MAX: 120000,
   DATE_PATTERN: /^\d{4}-\d{2}-\d{2}$/,
   TIME_PATTERN: /^([01]\d|2[0-3]):[0-5]\d$/,
+  ANNUAL_LEAVE_QUOTA: 12,
 } as const;
 
 export type EmployeeStatus = 'active' | 'inactive';
 export type EmployeeRole = 'employee' | 'admin';
 export type AttendanceStatus = 'Hadir' | 'Terlambat' | 'Izin' | 'Alpha';
 export type PayrollStatus = 'Draft' | 'Disetujui' | 'Dibayar';
+export type LeaveType = 'Cuti Tahunan' | 'Cuti Sakit' | 'Izin Khusus' | 'Cuti Melahirkan';
+export type LeaveStatus = 'Menunggu' | 'Disetujui' | 'Ditolak';
 
 export interface JobPosition {
   id: string;
@@ -119,6 +122,27 @@ export interface PayrollRecord {
   netPay: number;
   status: PayrollStatus;
   notes: string;
+  createdAt?: Timestamp | null;
+  updatedAt?: Timestamp | null;
+}
+
+export interface LeaveRequest {
+  id: string;
+  employeeId: string;
+  employeeUid: string;
+  employeeEmail: string;
+  employeeCode: string;
+  employeeName: string;
+  positionTitle: string;
+  department: string;
+  leaveType: LeaveType;
+  startDate: string;
+  endDate: string;
+  totalDays: number;
+  reason: string;
+  status: LeaveStatus;
+  adminNote: string;
+  reviewedBy: string;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
 }

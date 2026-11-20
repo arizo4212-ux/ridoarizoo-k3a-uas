@@ -172,6 +172,38 @@ service cloud.firestore {
         data.updatedAt is timestamp;
     }
 
+    function isValidLeaveRequest(data) {
+      return data.keys().hasAll([
+          'employeeId', 'employeeUid', 'employeeEmail', 'employeeCode',
+          'employeeName', 'positionTitle', 'department', 'leaveType',
+          'startDate', 'endDate', 'totalDays', 'reason', 'status',
+          'adminNote', 'reviewedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'employeeId', 'employeeUid', 'employeeEmail', 'employeeCode',
+          'employeeName', 'positionTitle', 'department', 'leaveType',
+          'startDate', 'endDate', 'totalDays', 'reason', 'status',
+          'adminNote', 'reviewedBy', 'createdAt', 'updatedAt'
+        ]) &&
+        isValidId(data.employeeId) &&
+        data.employeeUid is string && data.employeeUid.size() <= 128 &&
+        data.employeeEmail is string && data.employeeEmail.size() >= 3 && data.employeeEmail.size() <= 160 &&
+        data.employeeCode is string && data.employeeCode.size() >= 2 && data.employeeCode.size() <= 32 &&
+        data.employeeName is string && data.employeeName.size() >= 2 && data.employeeName.size() <= 120 &&
+        data.positionTitle is string && data.positionTitle.size() >= 2 && data.positionTitle.size() <= 80 &&
+        data.department is string && data.department.size() >= 2 && data.department.size() <= 80 &&
+        data.leaveType in ['Cuti Tahunan', 'Cuti Sakit', 'Izin Khusus', 'Cuti Melahirkan'] &&
+        data.startDate is string && data.startDate.size() == 10 && data.startDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.endDate is string && data.endDate.size() == 10 && data.endDate.matches('^\\d{4}-\\d{2}-\\d{2}$') &&
+        data.totalDays is int && data.totalDays >= 1 && data.totalDays <= 90 &&
+        data.reason is string && data.reason.size() >= 3 && data.reason.size() <= 300 &&
+        data.status in ['Menunggu', 'Disetujui', 'Ditolak'] &&
+        data.adminNote is string && data.adminNote.size() <= 300 &&
+        data.reviewedBy is string && data.reviewedBy.size() <= 120 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
     // 4. Collection Rules (Schema & Temporal Enforced)
 
     match /admins/{uid} {
@@ -242,6 +274,16 @@ service cloud.firestore {
       allow update: if isValidId(payrollId) && isValidPayroll(incoming()) &&
         incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
       allow delete: if isValidId(payrollId);
+    }
+
+    match /leave_requests/{leaveId} {
+      allow get: if isValidId(leaveId);
+      allow list: if true;
+      allow create: if isValidId(leaveId) && isValidLeaveRequest(incoming()) &&
+        incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isValidId(leaveId) && isValidLeaveRequest(incoming()) &&
+        incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+      allow delete: if isValidId(leaveId);
     }
   }
 }

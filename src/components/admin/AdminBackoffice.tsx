@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   CalendarClock,
+  CalendarOff,
   Camera,
   Clock,
   LayoutDashboard,
@@ -24,21 +25,24 @@ import type {
   AttendanceRecord,
   Employee,
   JobPosition,
+  LeaveRequest,
   PayrollRecord,
 } from '../../types/hrm';
 import { PWAInstallButton } from '../PWAInstallButton';
 import { AttendanceAdminView } from './AttendanceAdminView';
 import { EmployeesPositionsView } from './EmployeesPositionsView';
+import { LeaveAdminView } from './LeaveAdminView';
 import { PayrollAdminView } from './PayrollAdminView';
 import { WorkScheduleView } from './WorkScheduleView';
 
-type AdminSection = 'overview' | 'employees' | 'schedules' | 'attendance' | 'payroll';
+type AdminSection = 'overview' | 'employees' | 'schedules' | 'attendance' | 'leaves' | 'payroll';
 
 const NAV_ITEMS: { id: AdminSection; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { id: 'overview', label: 'Ringkasan', icon: LayoutDashboard },
   { id: 'employees', label: 'Karyawan & Jabatan', icon: Users },
   { id: 'schedules', label: 'Hari & Jam Kerja', icon: CalendarClock },
   { id: 'attendance', label: 'Data Kehadiran', icon: Clock },
+  { id: 'leaves', label: 'Manajemen Cuti', icon: CalendarOff },
   { id: 'payroll', label: 'Payroll Harian', icon: Wallet },
 ];
 
@@ -51,6 +55,7 @@ export const AdminBackoffice: React.FC = () => {
   const [positions, setPositions] = useState<JobPosition[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [payrollRecords, setPayrollRecords] = useState<PayrollRecord[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
 
   useEffect(() => {
     const unsubEmp = onSnapshot(
@@ -95,11 +100,23 @@ export const AdminBackoffice: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'payroll_records')
     );
 
+    const unsubLeaves = onSnapshot(
+      collection(db, 'leave_requests'),
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as LeaveRequest))
+          .sort((a, b) => b.startDate.localeCompare(a.startDate));
+        setLeaveRequests(rows);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'leave_requests')
+    );
+
     return () => {
       unsubEmp();
       unsubPos();
       unsubAtt();
       unsubPay();
+      unsubLeaves();
     };
   }, []);
 
@@ -129,6 +146,11 @@ export const AdminBackoffice: React.FC = () => {
       todayAtt,
     };
   }, [employees, attendance, todayKey, currentMonthKey]);
+
+  const pendingLeavesCount = useMemo(
+    () => leaveRequests.filter((r) => r.status === 'Menunggu').length,
+    [leaveRequests]
+  );
 
   const currentNavLabel = NAV_ITEMS.find((n) => n.id === section)?.label || 'Ringkasan';
 
@@ -162,6 +184,11 @@ export const AdminBackoffice: React.FC = () => {
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 <span>{item.label}</span>
+                {item.id === 'leaves' && pendingLeavesCount > 0 && (
+                  <span className="ml-auto text-[11px] font-mono tabular-nums font-bold px-1.5 py-0.5 rounded bg-amber-400 text-slate-950">
+                    {pendingLeavesCount}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -233,6 +260,11 @@ export const AdminBackoffice: React.FC = () => {
                   >
                     <Icon className="w-4 h-4" />
                     <span>{item.label}</span>
+                    {item.id === 'leaves' && pendingLeavesCount > 0 && (
+                      <span className="ml-auto text-[11px] font-mono tabular-nums font-bold px-1.5 py-0.5 rounded bg-amber-400 text-slate-950">
+                        {pendingLeavesCount}
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -334,6 +366,24 @@ export const AdminBackoffice: React.FC = () => {
                 </div>
               </div>
 
+              {pendingLeavesCount > 0 && (
+                <div className="rounded-2xl bg-amber-50 border border-amber-200 px-5 py-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2.5 text-xs text-amber-900">
+                    <CalendarOff className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>
+                      Ada <strong className="font-mono tabular-nums">{pendingLeavesCount}</strong> pengajuan cuti karyawan yang menunggu persetujuan Manajemen.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSection('leaves')}
+                    className="rounded-lg bg-amber-600 hover:bg-amber-700 px-3.5 py-2 text-xs font-semibold text-white cursor-pointer whitespace-nowrap w-fit"
+                  >
+                    Tinjau Pengajuan Cuti
+                  </button>
+                </div>
+              )}
+
               {/* Today's Live Attendance Feed */}
               <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-4">
@@ -424,6 +474,14 @@ export const AdminBackoffice: React.FC = () => {
           )}
           {section === 'attendance' && (
             <AttendanceAdminView attendance={attendance} employees={employees} />
+          )}
+          {section === 'leaves' && (
+            <LeaveAdminView
+              leaveRequests={leaveRequests}
+              employees={employees}
+              attendance={attendance}
+              reviewerName={sessionLabel.name}
+            />
           )}
           {section === 'payroll' && (
             <PayrollAdminView

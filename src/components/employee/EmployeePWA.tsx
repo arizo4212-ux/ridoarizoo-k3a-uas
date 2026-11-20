@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeftRight,
   Calendar,
+  CalendarOff,
   Camera,
   CheckCircle2,
   Clock,
@@ -11,13 +12,16 @@ import {
   Home,
   LogOut,
   MapPin,
+  Plus,
   Receipt,
+  Trash2,
   User as UserIcon,
   Wallet,
   X,
 } from 'lucide-react';
 import {
   collection,
+  deleteDoc,
   doc,
   onSnapshot,
   query,
@@ -29,6 +33,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { db, handleFirestoreError, OperationType } from '../../lib/firebase';
 import {
+  calculateInclusiveDays,
   calculateWorkMinutes,
   exportRowsToCSV,
   formatDuration,
@@ -39,12 +44,26 @@ import {
   getLocalDateKey,
   getMonthRange,
   isLateClockIn,
+  sanitizeId,
 } from '../../lib/format';
-import type { AttendanceRecord, PayrollRecord } from '../../types/hrm';
+import {
+  HRM_LIMITS,
+  type AttendanceRecord,
+  type LeaveRequest,
+  type LeaveType,
+  type PayrollRecord,
+} from '../../types/hrm';
 import { PWAInstallButton } from '../PWAInstallButton';
 import { SelfieCameraModal } from '../SelfieCameraModal';
 
-type EmployeeTab = 'beranda' | 'presensi' | 'laporan' | 'profil';
+type EmployeeTab = 'beranda' | 'presensi' | 'cuti' | 'laporan' | 'profil';
+
+const LEAVE_TYPES: LeaveType[] = [
+  'Cuti Tahunan',
+  'Cuti Sakit',
+  'Izin Khusus',
+  'Cuti Melahirkan',
+];
 
 export const EmployeePWA: React.FC = () => {
   const {
@@ -63,6 +82,7 @@ export const EmployeePWA: React.FC = () => {
   const [activeTab, setActiveTab] = useState<EmployeeTab>('beranda');
   const [attendanceList, setAttendanceList] = useState<AttendanceRecord[]>([]);
   const [payrollList, setPayrollList] = useState<PayrollRecord[]>([]);
+  const [leaveList, setLeaveList] = useState<LeaveRequest[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(() => getCurrentMonthKey());
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
@@ -71,6 +91,15 @@ export const EmployeePWA: React.FC = () => {
   const [detailRecord, setDetailRecord] = useState<AttendanceRecord | null>(null);
   const [selectedPayslip, setSelectedPayslip] = useState<PayrollRecord | null>(null);
   const [showEditProfile, setShowEditProfile] = useState(false);
+
+  // Leave request modal state
+  const [leaveModalOpen, setLeaveModalOpen] = useState(false);
+  const [leaveType, setLeaveType] = useState<LeaveType>('Cuti Tahunan');
+  const [leaveStart, setLeaveStart] = useState(() => getLocalDateKey());
+  const [leaveEnd, setLeaveEnd] = useState(() => getLocalDateKey());
+  const [leaveReason, setLeaveReason] = useState('');
+  const [leaveFormError, setLeaveFormError] = useState<string | null>(null);
+  const [savingLeave, setSavingLeave] = useState(false);
 
   // Self-onboarding form state when signed-in user does not have an employee record yet
   const [onboardName, setOnboardName] = useState(sessionLabel.name || '');
@@ -90,11 +119,12 @@ export const EmployeePWA: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Listen to employee's own attendance & payroll records
+  // Listen to employee's own attendance, payroll, and leave records
   useEffect(() => {
     if (!employeeProfile?.id) {
       setAttendanceList([]);
       setPayrollList([]);
+      setLeaveList([]);
       return;
     }
 
@@ -130,9 +160,26 @@ export const EmployeePWA: React.FC = () => {
       (err) => handleFirestoreError(err, OperationType.LIST, 'payroll_records')
     );
 
+    const leaveQuery = query(
+      collection(db, 'leave_requests'),
+      where('employeeId', '==', employeeProfile.id)
+    );
+
+    const unsubLeaves = onSnapshot(
+      leaveQuery,
+      (snap) => {
+        const rows = snap.docs
+          .map((d) => ({ id: d.id, ...d.data() } as LeaveRequest))
+          .sort((a, b) => b.startDate.localeCompare(a.startDate));
+        setLeaveList(rows);
+      },
+      (err) => handleFirestoreError(err, OperationType.LIST, 'leave_requests')
+    );
+
     return () => {
       unsubAtt();
       unsubPay();
+      unsubLeaves();
     };
   }, [employeeProfile?.id]);
 
@@ -208,6 +255,93 @@ export const EmployeePWA: React.FC = () => {
       totalWage,
     };
   }, [attendanceList, selectedMonth, employeeProfile?.dailyRate]);
+
+  const leaveQuota = useMemo(() => {
+    const yearPrefix = todayKey.slice(0, 4);
+    const usedDays = leaveList
+      .filter(
+        (r) =>
+          r.status === 'Disetujui' &&
+          r.leaveType === 'Cuti Tahunan' &&
+          r.startDate.startsWith(yearPrefix)
+      )
+      .reduce((sum, r) => sum + r.totalDays, 0);
+    const pendingCount = leaveList.filter((r) => r.status === 'Menunggu').length;
+    return {
+      totalQuota: HRM_LIMITS.ANNUAL_LEAVE_QUOTA,
+      usedDays,
+      remainingDays: Math.max(0, HRM_LIMITS.ANNUAL_LEAVE_QUOTA - usedDays),
+      pendingCount,
+    };
+  }, [leaveList, todayKey]);
+
+  const leaveDaysCount = useMemo(
+    () => calculateInclusiveDays(leaveStart, leaveEnd),
+    [leaveStart, leaveEnd]
+  );
+
+  const openLeaveModal = () => {
+    setLeaveType('Cuti Tahunan');
+    setLeaveStart(todayKey);
+    setLeaveEnd(todayKey);
+    setLeaveReason('');
+    setLeaveFormError(null);
+    setLeaveModalOpen(true);
+  };
+
+  const handleSubmitLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!employeeProfile) return;
+    setLeaveFormError(null);
+
+    if (leaveDaysCount <= 0) {
+      setLeaveFormError('Tanggal selesai harus sama atau lebih besar dari tanggal mulai.');
+      return;
+    }
+    if (leaveReason.trim().length < 3) {
+      setLeaveFormError('Tuliskan alasan cuti minimal 3 karakter.');
+      return;
+    }
+
+    setSavingLeave(true);
+    try {
+      const leaveId = sanitizeId(`leave_${employeeProfile.id}_${Date.now()}`);
+      await setDoc(doc(db, 'leave_requests', leaveId), {
+        employeeId: employeeProfile.id,
+        employeeUid: employeeProfile.uid || user?.uid || employeeProfile.id,
+        employeeEmail: employeeProfile.email,
+        employeeCode: employeeProfile.employeeCode,
+        employeeName: employeeProfile.name,
+        positionTitle: employeeProfile.positionTitle,
+        department: employeeProfile.department,
+        leaveType,
+        startDate: leaveStart,
+        endDate: leaveEnd,
+        totalDays: leaveDaysCount,
+        reason: leaveReason.trim().slice(0, 300),
+        status: 'Menunggu',
+        adminNote: '',
+        reviewedBy: '',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      setLeaveModalOpen(false);
+      setActiveTab('cuti');
+    } catch (err) {
+      handleFirestoreError(err, OperationType.CREATE, 'leave_requests');
+    } finally {
+      setSavingLeave(false);
+    }
+  };
+
+  const handleCancelLeave = async (req: LeaveRequest) => {
+    if (req.status !== 'Menunggu') return;
+    try {
+      await deleteDoc(doc(db, 'leave_requests', req.id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `leave_requests/${req.id}`);
+    }
+  };
 
   const handleClockSubmit = async (photoDataUrl: string, note: string) => {
     if (!employeeProfile) return;
@@ -455,6 +589,7 @@ export const EmployeePWA: React.FC = () => {
             [
               { id: 'beranda', label: 'Beranda' },
               { id: 'presensi', label: 'Presensi' },
+              { id: 'cuti', label: 'Cuti' },
               { id: 'laporan', label: 'Laporan' },
               { id: 'profil', label: 'Profil & Gaji' },
             ] as const
@@ -749,6 +884,22 @@ export const EmployeePWA: React.FC = () => {
                   </div>
                 )}
               </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-xs text-slate-500">Sisa Kuota Cuti Tahunan</p>
+                  <p className="text-base font-bold font-mono tabular-nums text-slate-900 mt-0.5">
+                    {leaveQuota.remainingDays} <span className="text-xs font-normal text-slate-500">/ {leaveQuota.totalQuota} hari</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={openLeaveModal}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 px-3.5 py-2.5 text-xs font-semibold text-white cursor-pointer whitespace-nowrap min-h-[40px]"
+                >
+                  <CalendarOff className="w-3.5 h-3.5 text-teal-400" />
+                  <span>Ajukan Cuti</span>
+                </button>
+              </div>
             </aside>
           </div>
         )}
@@ -847,7 +998,117 @@ export const EmployeePWA: React.FC = () => {
           </section>
         )}
 
-        {/* TAB 3: LAPORAN */}
+        {/* TAB 3: MANAJEMEN CUTI */}
+        {activeTab === 'cuti' && (
+          <section className="space-y-5">
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <div>
+                <h1 className="text-lg font-bold text-slate-900">Pengajuan &amp; Kuota Cuti</h1>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Ajukan cuti tahunan, sakit, atau izin khusus langsung ke Manajemen Backoffice.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={openLeaveModal}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-teal-600 hover:bg-teal-700 px-4 py-2.5 text-xs font-semibold text-white min-h-[44px] cursor-pointer whitespace-nowrap"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Ajukan Cuti / Izin</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-500">Sisa Cuti</p>
+                <p className="text-2xl font-bold font-mono tabular-nums text-teal-700 mt-1">
+                  {leaveQuota.remainingDays}
+                  <span className="text-xs font-normal text-slate-400"> hr</span>
+                </p>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-500">Terpakai</p>
+                <p className="text-2xl font-bold font-mono tabular-nums text-slate-900 mt-1">
+                  {leaveQuota.usedDays}
+                  <span className="text-xs font-normal text-slate-400"> hr</span>
+                </p>
+              </div>
+              <div className="bg-white rounded-2xl border border-slate-200 p-4">
+                <p className="text-xs text-slate-500">Menunggu</p>
+                <p className="text-2xl font-bold font-mono tabular-nums text-amber-600 mt-1">
+                  {leaveQuota.pendingCount}
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-4">
+              <h2 className="text-sm font-bold text-slate-900">Riwayat Pengajuan Cuti Saya</h2>
+              {leaveList.length === 0 ? (
+                <div className="py-10 text-center border border-dashed border-slate-200 rounded-xl">
+                  <CalendarOff className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-slate-700">Belum ada pengajuan cuti</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Ketuk &ldquo;Ajukan Cuti / Izin&rdquo; untuk membuat pengajuan baru.
+                  </p>
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {leaveList.map((req) => (
+                    <div
+                      key={req.id}
+                      className="py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                    >
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2.5 flex-wrap">
+                          <span className="text-sm font-bold text-slate-900">{req.leaveType}</span>
+                          <span
+                            className={`text-xs font-semibold ${
+                              req.status === 'Disetujui'
+                                ? 'text-emerald-700'
+                                : req.status === 'Menunggu'
+                                ? 'text-amber-700'
+                                : 'text-red-600'
+                            }`}
+                          >
+                            · {req.status}
+                          </span>
+                        </div>
+                        <p className="text-xs font-medium text-slate-700">
+                          {formatIndonesianDate(req.startDate)}
+                          {req.endDate !== req.startDate
+                            ? ` – ${formatIndonesianDate(req.endDate)}`
+                            : ''}{' '}
+                          <span className="font-mono tabular-nums text-slate-500">
+                            ({req.totalDays} hari)
+                          </span>
+                        </p>
+                        <p className="text-xs text-slate-500">{req.reason}</p>
+                        {req.adminNote && (
+                          <p className="text-xs text-teal-800 bg-teal-50 border border-teal-100 rounded-lg px-2.5 py-1.5 w-fit">
+                            Catatan HR: {req.adminNote}
+                          </p>
+                        )}
+                      </div>
+
+                      {req.status === 'Menunggu' && (
+                        <button
+                          type="button"
+                          onClick={() => handleCancelLeave(req)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 px-3 py-2 text-xs font-semibold text-red-700 cursor-pointer w-fit shrink-0"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Batalkan</span>
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* TAB 4: LAPORAN */}
         {activeTab === 'laporan' && (
           <section className="space-y-5">
             <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 space-y-5">
@@ -1123,11 +1384,12 @@ export const EmployeePWA: React.FC = () => {
 
       {/* Fixed Mobile Bottom Tab Bar (64px height, 44px+ touch targets) */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 pb-safe">
-        <div className="grid grid-cols-4 h-16 items-center">
+        <div className="grid grid-cols-5 h-16 items-center">
           {(
             [
               { id: 'beranda', label: 'Beranda', icon: Home },
               { id: 'presensi', label: 'Presensi', icon: Clock },
+              { id: 'cuti', label: 'Cuti', icon: CalendarOff },
               { id: 'laporan', label: 'Laporan', icon: FileBarChart2 },
               { id: 'profil', label: 'Profil', icon: UserIcon },
             ] as const
@@ -1150,6 +1412,122 @@ export const EmployeePWA: React.FC = () => {
           })}
         </div>
       </nav>
+
+      {/* Ajukan Cuti / Izin Modal */}
+      {leaveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-950/60 backdrop-blur-sm p-0 sm:p-4">
+          <form
+            onSubmit={handleSubmitLeave}
+            className="w-full sm:max-w-md bg-white rounded-t-3xl sm:rounded-2xl border border-slate-200 overflow-hidden shadow-2xl"
+          >
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Ajukan Cuti / Izin</h3>
+                <p className="text-xs text-slate-500">
+                  Sisa kuota cuti tahunan: <strong className="font-mono tabular-nums">{leaveQuota.remainingDays} hari</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLeaveModalOpen(false)}
+                className="p-2 rounded-lg text-slate-400 hover:text-slate-700 min-w-[40px] min-h-[40px] flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {leaveFormError && (
+                <div className="rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs text-red-700">
+                  {leaveFormError}
+                </div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Jenis Cuti / Izin
+                </label>
+                <select
+                  value={leaveType}
+                  onChange={(e) => setLeaveType(e.target.value as LeaveType)}
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm bg-white"
+                >
+                  {LEAVE_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Tanggal Mulai
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={leaveStart}
+                    onChange={(e) => {
+                      setLeaveStart(e.target.value);
+                      if (e.target.value > leaveEnd) setLeaveEnd(e.target.value);
+                    }}
+                    className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Tanggal Selesai
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={leaveStart}
+                    value={leaveEnd}
+                    onChange={(e) => setLeaveEnd(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm"
+                  />
+                </div>
+              </div>
+              <div className="rounded-xl bg-slate-50 border border-slate-200 px-3.5 py-2.5 text-xs flex justify-between">
+                <span className="text-slate-500">Durasi diajukan</span>
+                <span className="font-mono tabular-nums font-bold text-slate-900">
+                  {leaveDaysCount} hari
+                </span>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Alasan / Keterangan
+                </label>
+                <textarea
+                  rows={3}
+                  required
+                  minLength={3}
+                  maxLength={300}
+                  value={leaveReason}
+                  onChange={(e) => setLeaveReason(e.target.value)}
+                  placeholder="Tuliskan alasan pengajuan cuti Anda..."
+                  className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm"
+                />
+              </div>
+            </div>
+            <div className="px-5 py-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setLeaveModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 min-h-[44px] cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                disabled={savingLeave}
+                className="px-5 py-2 rounded-xl bg-teal-600 text-xs font-semibold text-white hover:bg-teal-700 min-h-[44px] disabled:opacity-50 cursor-pointer"
+              >
+                {savingLeave ? 'Mengirim...' : 'Kirim Pengajuan'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Camera Selfie Modal */}
       {cameraMode && (
