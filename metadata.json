@@ -1,0 +1,6 @@
+{
+  "name": "KaryaDesk HRM",
+  "description": "Aplikasi Manajemen SDM (HRM) dengan Panel Backoffice Manajemen, Mobile PWA Karyawan berfoto selfie Clock-In/Out, dan Payroll Gaji Harian sinkronisasi real-time multi-perangkat.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

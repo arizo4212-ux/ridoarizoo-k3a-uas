@@ -1,0 +1,203 @@
+{
+  "entities": {
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized backoffice HR administrators.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "createdAt"]
+    },
+    "JobPosition": {
+      "title": "JobPosition",
+      "description": "Master job roles/positions and default daily wage rates.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "department": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "defaultDailyRate": { "type": "number" },
+        "description": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "department", "defaultDailyRate", "description", "createdAt", "updatedAt"]
+    },
+    "Employee": {
+      "title": "Employee",
+      "description": "Employee master profile, job assignment, and daily pay rate.",
+      "type": "object",
+      "properties": {
+        "employeeCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9_-]+$" },
+        "uid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "address": { "type": "string", "maxLength": 300 },
+        "positionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "positionTitle": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "department": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "dailyRate": { "type": "number" },
+        "joinDate": { "type": "string", "minLength": 10, "maxLength": 12, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "status": { "type": "string", "enum": ["active", "inactive"], "maxLength": 16 },
+        "role": { "type": "string", "enum": ["employee", "admin"], "maxLength": 16 },
+        "bankName": { "type": "string", "maxLength": 60 },
+        "bankAccount": { "type": "string", "maxLength": 60 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "employeeCode", "uid", "name", "email", "phone", "address",
+        "positionId", "positionTitle", "department", "dailyRate",
+        "joinDate", "status", "role", "bankName", "bankAccount",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "WorkSchedule": {
+      "title": "WorkSchedule",
+      "description": "Weekly working days, shift start/end times, and late tolerance.",
+      "type": "object",
+      "properties": {
+        "dayIndex": { "type": "number" },
+        "dayName": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "isWorkDay": { "type": "boolean" },
+        "startTime": { "type": "string", "minLength": 5, "maxLength": 5, "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        "endTime": { "type": "string", "minLength": 5, "maxLength": 5, "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$" },
+        "graceMinutes": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["dayIndex", "dayName", "isWorkDay", "startTime", "endTime", "graceMinutes", "updatedAt"]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Global HRM attendance and company settings.",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "officeLocation": { "type": "string", "maxLength": 200 },
+        "requireSelfie": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["companyName", "officeLocation", "requireSelfie", "updatedAt"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Daily employee clock-in and clock-out attendance with selfie verification.",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "employeeUid": { "type": "string", "maxLength": 128 },
+        "employeeEmail": { "type": "string", "format": "email", "maxLength": 160 },
+        "employeeCode": { "type": "string", "maxLength": 32 },
+        "employeeName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "positionTitle": { "type": "string", "maxLength": 80 },
+        "date": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "scheduleStart": { "type": "string", "maxLength": 10 },
+        "scheduleEnd": { "type": "string", "maxLength": 10 },
+        "clockInTime": { "type": "string", "minLength": 10, "maxLength": 40 },
+        "clockInPhoto": { "type": "string", "maxLength": 120000 },
+        "clockInNote": { "type": "string", "maxLength": 240 },
+        "clockOutTime": { "type": "string", "maxLength": 40 },
+        "clockOutPhoto": { "type": "string", "maxLength": 120000 },
+        "clockOutNote": { "type": "string", "maxLength": 240 },
+        "workMinutes": { "type": "number" },
+        "status": { "type": "string", "enum": ["Hadir", "Terlambat", "Izin", "Alpha"], "maxLength": 20 },
+        "dailyRateSnapshot": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "employeeId", "employeeUid", "employeeEmail", "employeeCode",
+        "employeeName", "positionTitle", "date", "scheduleStart", "scheduleEnd",
+        "clockInTime", "clockInPhoto", "clockInNote",
+        "clockOutTime", "clockOutPhoto", "clockOutNote",
+        "workMinutes", "status", "dailyRateSnapshot",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "AdminInvite": {
+      "title": "AdminInvite",
+      "description": "Email-keyed admin role invitations managed by existing admins.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "maxLength": 160 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "createdAt"]
+    },
+    "PayrollRecord": {
+      "title": "PayrollRecord",
+      "description": "Daily-rate payroll calculation record for an employee and period.",
+      "type": "object",
+      "properties": {
+        "periodKey": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "periodLabel": { "type": "string", "minLength": 3, "maxLength": 64 },
+        "startDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "endDate": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "employeeId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_-]+$" },
+        "employeeUid": { "type": "string", "maxLength": 128 },
+        "employeeEmail": { "type": "string", "format": "email", "maxLength": 160 },
+        "employeeCode": { "type": "string", "maxLength": 32 },
+        "employeeName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "positionTitle": { "type": "string", "maxLength": 80 },
+        "dailyRate": { "type": "number" },
+        "daysPresent": { "type": "number" },
+        "daysLate": { "type": "number" },
+        "totalDaysPaid": { "type": "number" },
+        "basePay": { "type": "number" },
+        "bonus": { "type": "number" },
+        "deduction": { "type": "number" },
+        "netPay": { "type": "number" },
+        "status": { "type": "string", "enum": ["Draft", "Disetujui", "Dibayar"], "maxLength": 20 },
+        "notes": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "periodKey", "periodLabel", "startDate", "endDate",
+        "employeeId", "employeeUid", "employeeEmail", "employeeCode",
+        "employeeName", "positionTitle", "dailyRate",
+        "daysPresent", "daysLate", "totalDaysPaid", "basePay",
+        "bonus", "deduction", "netPay", "status", "notes",
+        "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Registry of HR management admins."
+    },
+    "/admin_invites/{inviteId}": {
+      "schema": { "$ref": "#/entities/AdminInvite" },
+      "description": "Invited HR admin emails authorized to claim admin access on sign-in."
+    },
+    "/positions/{positionId}": {
+      "schema": { "$ref": "#/entities/JobPosition" },
+      "description": "Master job roles and default daily salary rates."
+    },
+    "/employees/{employeeId}": {
+      "schema": { "$ref": "#/entities/Employee" },
+      "description": "Employee directory, biodata, job role, and daily salary rate."
+    },
+    "/work_schedules/{dayKey}": {
+      "schema": { "$ref": "#/entities/WorkSchedule" },
+      "description": "Weekly working days and shift timings."
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/CompanySettings" },
+      "description": "Global company and attendance configuration."
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Employee clock-in/clock-out attendance records with selfie photos."
+    },
+    "/payroll_records/{payrollId}": {
+      "schema": { "$ref": "#/entities/PayrollRecord" },
+      "description": "Generated daily-rate payroll records per employee and period."
+    }
+  }
+}
